@@ -111,6 +111,8 @@ asyncTask();
 
 _Did the quick start not work for you, or you are noticing some weird behavior? Please see the [FAQ and Common Issues](#faq-and-common-issues)_
 
+_Want to use `as-bind` in production? Please see the [Production section in the FAQ and Common Issues](#production)_
+
 ## Additional Examples
 
 ## Passing a high-level type to a an exported function, and returning a high-level type
@@ -193,6 +195,26 @@ The `AsBind` class is meant to vaugely act as the [WebAssembly](https://develope
 
 Value that is the current version of your imported AsBind.
 
+##### RETURN_TYPES
+
+`AsBind.RETURN_TYPES`
+
+Constants (represented as JSON) of the supported return types on bound export functions. This is useful for forcing the return type on [bound export functions](#exports).
+
+For example, this could be used like:
+
+```typescript
+// Force our return type to our expected string
+asBindInstance.exports.myExportedFunctionThatReturnsAString.returnType =
+  AsBind.RETURN_TYPES.STRING;
+const myString = asBindInstance.exports.myExportedFunctionThatReturnsAString();
+
+// Force our return type to return a number (The pointer to the string)
+asBindInstance.exports.myExportedFunctionThatReturnsAString.returnType =
+  AsBind.RETURN_TYPES.NUMBER;
+const myNumber = asBindInstance.exports.myExportedFunctionThatReturnsAString();
+```
+
 ##### instantiate
 
 ```typescript
@@ -201,9 +223,7 @@ AsBind.instantiate: (
     WebAssembly.Module |
     BufferSource |
     Response |
-    PromiseLike<WebAssembly.Module> |
-    BufferSource |
-    Response
+    PromiseLike<WebAssembly.Module>
   ),
   imports?: WasmImports
 ) => Promise<AsBindInstance>`
@@ -237,13 +257,21 @@ An AsBindInstance is vaugley similar to a [WebAssembly instance](https://develop
 
 Similar to to [WebAssembly.Instance.prototype.exports](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WebAssembly/Instance/exports), this is an object containing all of the exported fields from the WebAssembly module. However, **exported functions** are bound / wrapped in which they will handle passing the supported high-level data types to the exported AssemblyScript function.
 
-Each **exported function** has the property: `shouldCacheTypes`. If you would like to disable type caching (speculative execution) for a particular function, you can do: `asBindInstance.exports.myFunction.shouldCacheTypes = false;`. Or set to true, to re-enable type caching.
+Each **exported function** has the properties:
+
+- `shouldCacheTypes`
+  - If you would like to disable type caching (speculative execution) for a particular function, you can do: `asBindInstance.exports.myFunction.shouldCacheTypes = false;`. Or set to true, to re-enable type caching.
+- `returnType`
+  - (Reccomended for production usage) Set this value on a bound export function, to force it's return type. This should be set to a constant found on: [`AsBind.RETURN_TYPES`](#return_types). Defaults to `null`.
+- `unsafeReturnValue`
+  - By default, all values (in particular [TypedArrays](https://www.assemblyscript.org/stdlib/typedarray.html#typedarray)) will be copied out of Wasm Memory, instead of giving direct read/write access. If you would like to use a view of the returned memory, you can do: `asBindInstance.exports.myFunction.unsafeReturnValue = true;`. For More context, please see the [AssemblyScript loader documentation](https://www.assemblyscript.org/loader.html#module-instance-utility) on array views.
+  - After settings this flag on a function, it will then return it's values wrapped in an object, like so: `{ptr: /* The pointer or index in wasm memory the view is reffering to */, value: /* The returned value (TypedArray) that is backed directly by Wasm Memory */}`
 
 ##### unboundExports
 
 This is essentially the same as the [WebAssembly.Instance.prototype.exports](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WebAssembly/Instance/exports), this is an object containing all of the exported fields from the WebAssembly module. These are not bound / wrapped, so you can access the original exported functions.
 
-#### importObject
+##### importObject
 
 Similar to to [WebAssembly.instantiateStreaming() importObject](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WebAssembly/instantiateStreaming), This is the original passed importObject on instantiation, after the **importObject functions** are bound / wrapped by as-bind.
 
@@ -251,23 +279,31 @@ Each wrapped **importObject function** has the property: `shouldCacheTypes`. If 
 
 ##### enableExportFunctionTypeCaching
 
-This will (re-)enable type caching (speculative execution) for ALL exported functions on the AsBindInstance.
+Calling this method will (re-)enable type caching (speculative execution) for ALL exported functions on the AsBindInstance.
 
 ##### disableExportFunctionTypeCaching
 
-This will disable type caching (speculative execution) for ALL exported functions on the AsBindInstance.
+Calling this method will disable type caching (speculative execution) for ALL exported functions on the AsBindInstance.
+
+##### enableExportFunctionUnsafeReturnValue
+
+Calling this method will (re-)enable unsafe return types for ALL exported functions on the AsBindInstance.
+
+##### disableExportFunctionUnsafeReturnValue
+
+Calling this method will disable unsafe return types for ALL exported functions on the AsBindInstance.
 
 ##### enableImportFunctionTypeCaching
 
-This will (re-)enable type caching (speculative execution) for ALL importObject functions on the AsBindInstance.
+Calling this method will (re-)enable type caching (speculative execution) for ALL importObject functions on the AsBindInstance.
 
-##### disableExportFunctionTypeCaching
+##### disableImportFunctionTypeCaching
 
-This will disable type caching (speculative execution) for ALL importObject functions on the AsBindInstance.
+Calling this method will disable type caching (speculative execution) for ALL importObject functions on the AsBindInstance.
 
 ## Motivation
 
-This library was inspired by several chats I had with some awesome buddies of mine in the WebAssembly Communitty:
+This library was inspired by several chats I had with some awesome buddies of mine in the WebAssembly Community:
 
 - [Till Schneidereit](https://twitter.com/tschneidereit) and I had a chat about [WasmBoy](https://github.com/torch2424/wasmboy), and about how I had a really good experience writing the emulator, even though I had to do my own memory management. But they helped me realize, building something low level isn't that bad with manual memory management, but building something like a markdown parser would be very tedious since you have to manually write the string back and forth. Which then inspired this library, and its [markdown parser demo](https://torch2424.github.io/as-bind/).
 
@@ -289,9 +325,17 @@ Eventually for the most performant option, we would want to do some JavaScript c
 
 In the future, these types of high-level data passing tools will not be needed for WebAssembly toolchains, once the [WebAssembly Inteface Types proposal](https://github.com/WebAssembly/interface-types/blob/master/proposals/interface-types/Explainer.md) lands, and this functionality is handled by the runtime / toolchain.
 
+## Production
+
+`as-bind` works by abstracting away using the [AssemblyScript Loader](https://www.assemblyscript.org/loader.html). For passing values into your AssemblyScript, it uses the Loader on your half to allocate memory, and then passes the pointer to the allocated memory. However, to pass a value back from AssemblyScript to JavaScript, AsBind will iterate through all the supported types until it finds a match (or doesn't in which case it just returns the number). However, returning a value _can sometimes_ conflict with something in AssemblyScript memory, as discovered in [#50](https://github.com/torch2424/as-bind/issues/50).
+
+Thus, for production usage we highly reccomend that you set the [`returnType` property on your bound export functions](#exports) to ensure that this conflict does not happen. 😄
+
 ## Projects using as-bind
 
 - The as-bind example is a Markdown Parser, in which as-bind takes in a string, passes it to a rough markdown parser / compiler written in AssemblyScript, and returns a string. [(Live Demo)](https://torch2424.github.io/as-bind/), [(Source Code)](https://github.com/torch2424/as-bind/tree/master/examples/markdown-parser)
+
+- [use-as-bind](https://github.com/tylervipond/use-as-bind) is a React hook for using as-bind with an as-bind enabled WASM source. It's goal is to provide a simple API for React users to add WASM to their apps. [(Live Demo)](https://tylervipond.github.io/use-as-bind/)
 
 _If you're project is using as-bind, and you would like to be featured here. Please open a README with links to your project, and if appropriate, explaining how as-bind is being used._ 😊
 

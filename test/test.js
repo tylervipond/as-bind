@@ -3,6 +3,9 @@ const assert = require("assert");
 const { AsBind } = require("../dist/as-bind.cjs");
 
 const wasmBytes = new Uint8Array(fs.readFileSync("./test/assembly/test.wasm"));
+const wasmBytesNoEntry = new Uint8Array(
+  fs.readFileSync("./test/assembly/test-no-entry.wasm")
+);
 
 describe("asbind", () => {
   const baseImportObject = {
@@ -36,13 +39,43 @@ describe("asbind", () => {
   });
 
   describe("instantiation", () => {
+    it("should error when instantiating a module that does not include the as-bind entryfile", async () => {
+      const wasmModule = await WebAssembly.compile(wasmBytesNoEntry);
+
+      let didInstantiate = false;
+      try {
+        await AsBind.instantiate(wasmModule, baseImportObject);
+        didInstantiate = true;
+      } catch (err) {
+        // Hooray! We caught the base instantiation
+        console.log("Expected Test Error: ", err.message);
+      }
+      if (didInstantiate) {
+        throw new Error("Was able to instantiate the incorrectly built test");
+      }
+
+      let didInstantiateSync = false;
+      try {
+        AsBind.instantiateSync(wasmModule, baseImportObject);
+        didInstantiateSync = true;
+      } catch (err) {
+        // Hooray! We caught the base instantiation
+        console.log("Expected Test Error: ", err.message);
+      }
+      if (didInstantiateSync) {
+        throw new Error(
+          "Was able to instantiateSync the incorrectly built test"
+        );
+      }
+    });
+
     it("should instantiate WebAssembly.Module", async () => {
       const wasmModule = await WebAssembly.compile(wasmBytes);
       asbindInstance = await AsBind.instantiate(wasmModule, baseImportObject);
 
       assert(asbindInstance.exports !== undefined, true);
       assert(asbindInstance.exports.helloWorld !== undefined, true);
-      assert(asbindInstance.exports.__alloc !== undefined, true);
+      assert(asbindInstance.exports.__new !== undefined, true);
       assert(asbindInstance.exports.__release !== undefined, true);
     });
 
@@ -52,7 +85,7 @@ describe("asbind", () => {
 
       assert(asbindInstance.exports !== undefined, true);
       assert(asbindInstance.exports.helloWorld !== undefined, true);
-      assert(asbindInstance.exports.__alloc !== undefined, true);
+      assert(asbindInstance.exports.__new !== undefined, true);
       assert(asbindInstance.exports.__release !== undefined, true);
     });
 
@@ -61,7 +94,7 @@ describe("asbind", () => {
 
       assert(asbindInstance.exports !== undefined, true);
       assert(asbindInstance.exports.helloWorld !== undefined, true);
-      assert(asbindInstance.exports.__alloc !== undefined, true);
+      assert(asbindInstance.exports.__new !== undefined, true);
       assert(asbindInstance.exports.__release !== undefined, true);
     });
 
@@ -70,7 +103,7 @@ describe("asbind", () => {
 
       assert(asbindInstance.exports !== undefined, true);
       assert(asbindInstance.exports.helloWorld !== undefined, true);
-      assert(asbindInstance.exports.__alloc !== undefined, true);
+      assert(asbindInstance.exports.__new !== undefined, true);
       assert(asbindInstance.exports.__release !== undefined, true);
     });
 
@@ -96,7 +129,7 @@ describe("asbind", () => {
 
       assert(asbindInstance.exports !== undefined, true);
       assert(asbindInstance.exports.helloWorld !== undefined, true);
-      assert(asbindInstance.exports.__alloc !== undefined, true);
+      assert(asbindInstance.exports.__new !== undefined, true);
       assert(asbindInstance.exports.__release !== undefined, true);
     });
   });
@@ -280,7 +313,6 @@ describe("asbind", () => {
   describe("type caching", () => {
     let asbindInstance;
     let testImportCalledWith = [];
-    let weappedBaseImportObject = {};
 
     beforeEach(async () => {
       const importObjectFunction = value => {
@@ -591,4 +623,101 @@ describe("asbind", () => {
       );
     });
   });
+
+  describe("Unsafe Return Value", () => {
+    let asbindInstance;
+
+    beforeEach(async () => {
+      asbindInstance = await AsBind.instantiate(wasmBytes, baseImportObject);
+    });
+
+    it("should not break strings", () => {
+      asbindInstance.exports.helloWorld.unsafeReturnValue = true;
+      const response = asbindInstance.exports.helloWorld("asbind");
+      assert.equal(response, "Hello asbind!");
+    });
+
+    // TypedArrays
+    [
+      "Int8Array",
+      "Uint8Array",
+      "Int16Array",
+      "Uint16Array",
+      "Int32Array",
+      "Uint32Array",
+      "Float32Array",
+      "Float64Array"
+    ].forEach(typedArrayKey => {
+      it(`should handle ${typedArrayKey} being returned unsafe`, () => {
+        const exportName = `map${typedArrayKey}`;
+
+        assert.equal(
+          asbindInstance.exports[exportName].unsafeReturnValue,
+          false
+        );
+
+        let randomValue;
+        let array;
+        let arrayMapResponse;
+
+        randomValue = Math.floor(Math.random() * 10) + 1;
+        array = global[typedArrayKey].from([randomValue]);
+        arrayMapResponse = asbindInstance.exports[exportName](array);
+
+        // Check to make sure it returns an arrary
+        assert(arrayMapResponse.length > 0);
+
+        asbindInstance.exports[exportName].unsafeReturnValue = true;
+
+        randomValue = Math.floor(Math.random() * 10) + 1;
+        array = global[typedArrayKey].from([randomValue]);
+        arrayMapResponse = asbindInstance.exports[exportName](array);
+
+        // Assert it now returns a pointer and a value
+        assert(arrayMapResponse.ptr !== undefined);
+        assert(arrayMapResponse.value !== undefined);
+      });
+    });
+  });
+
+  describe("Forcing Return Types", () => {
+    let asbindInstance;
+
+    beforeEach(async () => {
+      asbindInstance = await AsBind.instantiate(wasmBytes, baseImportObject);
+    });
+
+    it("should allow setting the returnType on a bound export function", () => {
+      // Make sure the return type is null
+      assert.equal(asbindInstance.exports.helloWorld.returnType, null);
+
+      // Call the export
+      const defaultResponse = asbindInstance.exports.helloWorld("returnType");
+      assert.equal(typeof defaultResponse, "string");
+
+      // Set the return type to a number
+      asbindInstance.exports.helloWorld.returnType = AsBind.RETURN_TYPES.NUMBER;
+
+      // Call the export
+      const numberResponse = asbindInstance.exports.helloWorld("returnType");
+      assert.equal(typeof numberResponse, "number");
+
+      // Set the return type to a string
+      asbindInstance.exports.helloWorld.returnType = AsBind.RETURN_TYPES.STRING;
+
+      // Call the export
+      const stringResponse = asbindInstance.exports.helloWorld("returnType");
+      assert.equal(typeof stringResponse, "string");
+
+      // Remove the returnType
+      asbindInstance.exports.helloWorld.returnType = null;
+
+      // Call the export
+      const nullReturnTypeResponse = asbindInstance.exports.helloWorld(
+        "returnType"
+      );
+      assert.equal(typeof nullReturnTypeResponse, "string");
+    });
+  });
+  // Done!
 });
